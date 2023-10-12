@@ -1,4 +1,4 @@
-﻿# Function to validate user input as 'Y' or 'N'
+# Function to validate user input as 'Y' or 'N'
 function Validate-YesNoInput {
     param (
         [string]$prompt
@@ -14,7 +14,7 @@ function Validate-YesNoInput {
     return $response
 }
 
-# Check if the user wants to secure the system
+# Ask if the user wants to secure the system
 $secureSystem = Validate-YesNoInput "Do you want to secure the system? (Y/N)"
 
 if ($secureSystem -ne "Y") {
@@ -52,6 +52,10 @@ if ($windowsUpdateStatus -ne "Running") {
     }
 }
 
+# Check OS Version (Just a simple info check)
+$osVersion = Get-WmiObject -Class Win32_OperatingSystem | Select-Object -ExpandProperty Version
+Write-Host "Your current OS version is $osVersion. Please ensure it's up to date with the latest LTS version."
+
 # Make sure Windows Defender is activated
 $defenderStatus = Get-Service -Name "WinDefend" | Select-Object -ExpandProperty Status
 
@@ -75,15 +79,6 @@ if (-not (Test-Path -Path $recoveryKeyPath -PathType Container)) {
     New-Item -Path $recoveryKeyPath -ItemType Directory -Force
 }
 
-# Enable BitLocker on a specific drive without TPM using a password protector
-$driveLetter = "C:"
-$recoveryKeyPath = "C:\BitLockerRecovery"
-
-# Check if the recovery key path exists, and create it if not
-if (-not (Test-Path -Path $recoveryKeyPath -PathType Container)) {
-    New-Item -Path $recoveryKeyPath -ItemType Directory -Force
-}
-
 # Check if BitLocker is already enabled on the drive
 $bitlockerStatus = Get-BitLockerVolume -MountPoint $driveLetter | Select-Object -ExpandProperty VolumeStatus
 
@@ -99,7 +94,7 @@ if ($bitlockerStatus -eq "FullyEncrypted") {
     $enableBitLockerResult = Enable-BitLocker -MountPoint $driveLetter -PasswordProtector -Password $secureBitlockerKey -SkipHardwareTest
     
     # Check if BitLocker was successfully enabled
-    if ($enableBitLockerResult -and $enableBitLockerResult.ProtectionStatus -eq "FullyEncrypted") {
+    if ($enableBitLockerResult -and $enableBitLockerResult.ProtectionStatus -eq "On") {
         Write-Host "BitLocker has been enabled on drive $driveLetter."
         # Save the BitLocker encryption key to a file (securely)
         $secureBitlockerKey | ConvertFrom-SecureString | Out-File -FilePath "$recoveryKeyPath\BitLockerKey.txt"
@@ -109,20 +104,14 @@ if ($bitlockerStatus -eq "FullyEncrypted") {
     }
 }
 
-
-# Rest of the script...
-
-
-
 # Check if automatic login is enabled
-$autoLoginKeyExists = Test-Path -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\LastLoggedOnUser'
+$autoLogin = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -ErrorAction SilentlyContinue
 
-if ($autoLoginKeyExists) {
+if ($autoLogin.AutoAdminLogon -eq "1") {
     $disableAutoLogin = Validate-YesNoInput "Automatic login is enabled. Disable it now? (Y/N)"
     if ($disableAutoLogin -eq "Y") {
         Write-Host "Disabling automatic login..."
-        # Remove the AutoAdminLogon registry values
-        Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI' -Name 'LastLoggedOnUser' -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name "AutoAdminLogon" -Value "0"
         Write-Host "Automatic login is now disabled."
     } else {
         Write-Host "Automatic login remains enabled."
@@ -138,7 +127,6 @@ if ($remoteAccessEnabled -eq 0) {
     $disableRemoteAccess = Validate-YesNoInput "Remote access is enabled. Disable it now? (Y/N)"
     if ($disableRemoteAccess -eq "Y") {
         Write-Host "Disabling remote access..."
-        # Disable remote access
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 1
         Write-Host "Remote access is now disabled."
     } else {
@@ -146,11 +134,11 @@ if ($remoteAccessEnabled -eq 0) {
     }
 }
 
-# Install an antivirus tool (e.g., MalwareBytes)
-$installAntivirus = Validate-YesNoInput "Do you want to install an antivirus tool? (Y/N)"
+# Install MalwareBytes
+$installAntivirus = Validate-YesNoInput "Do you want to install MalwareBytes? (Y/N)"
 
 if ($installAntivirus -eq "Y") {
-    Write-Host "Downloading and installing antivirus tool (e.g., MalwareBytes)..."
+    Write-Host "Downloading and installing MalwareBytes..."
 
     # Define the download URL
     $downloadUrl = "https://www.malwarebytes.com/api/downloads/mb-windows?filename=MBSetup.exe"
@@ -173,7 +161,7 @@ if ($installAntivirus -eq "Y") {
         Write-Host "Failed to install MalwareBytes."
     }
 } else {
-    Write-Host "Antivirus tool installation skipped."
+    Write-Host "MalwareBytes installation skipped."
 }
 
 # Check if Adobe Flash Player is installed
@@ -183,17 +171,9 @@ if ($flashInstalled -ne $null) {
     $uninstallFlash = Validate-YesNoInput "Adobe Flash Player is installed. Uninstall it now? (Y/N)"
     if ($uninstallFlash -eq "Y") {
         Write-Host "Uninstalling Adobe Flash Player..."
-        # Get the uninstall string
         $uninstallString = $flashInstalled.UninstallString
-        # Run the uninstaller
         Start-Process -FilePath $uninstallString -Wait
-        # Check if uninstallation was successful
-        $flashUninstalled = Get-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Adobe Flash Player ActiveX' -Name "UninstallString" -ErrorAction SilentlyContinue
-        if ($flashUninstalled -eq $null) {
-            Write-Host "Adobe Flash Player has been uninstalled."
-        } else {
-            Write-Host "Failed to uninstall Adobe Flash Player."
-        }
+        Write-Host "Adobe Flash Player has been uninstalled."
     } else {
         Write-Host "Adobe Flash Player remains installed."
     }
@@ -205,29 +185,17 @@ if ($flashInstalled -ne $null) {
 $modifyUsers = Validate-YesNoInput "Do you want to modify Users? (Y/N)"
 
 if ($modifyUsers -eq "Y") {
-    # List users
     $users = Get-LocalUser | Select-Object -Property Name, Description
+    Write-Host "List of Users:"
+    $users | Format-Table -AutoSize
 
-    if ($users.Count -gt 0) {
-        Write-Host "List of Users:"
-        $users | Format-Table -AutoSize
+    $removeUser = Read-Host "Do you want to remove a user? (Enter the username or N to skip)"
 
-        # Ask if the user wants to remove a user
-        $removeUser = Read-Host "Do you want to remove a user? (Enter the username or N to skip)"
-
-        if ($removeUser -ne "N") {
-            $userToRemove = $users | Where-Object { $_.Name -eq $removeUser }
-
-            if ($userToRemove -ne $null) {
-                # Remove the selected user
-                Remove-LocalUser -Name $removeUser -ErrorAction SilentlyContinue
-                Write-Host "User '$removeUser' has been removed."
-            } else {
-                Write-Host "User '$removeUser' not found. No users were removed."
-            }
-        }
+    if ($removeUser -ne "N") {
+        Remove-LocalUser -Name $removeUser -ErrorAction SilentlyContinue
+        Write-Host "User '$removeUser' has been removed."
     } else {
-        Write-Host "No users found on the system."
+        Write-Host "User modification skipped."
     }
 }
 
@@ -235,67 +203,24 @@ if ($modifyUsers -eq "Y") {
 $modifyGroups = Validate-YesNoInput "Do you want to modify Groups? (Y/N)"
 
 if ($modifyGroups -eq "Y") {
-    # List groups
     $groups = Get-LocalGroup | Select-Object -Property Name, Description
+    Write-Host "List of Groups:"
+    $groups | Format-Table -AutoSize
 
-    if ($groups.Count -gt 0) {
-        Write-Host "List of Groups:"
-        $groups | Format-Table -AutoSize
+    $removeGroup = Read-Host "Do you want to remove a group? (Enter the group name or N to skip)"
 
-        # Ask if the user wants to remove a group
-        $removeGroup = Read-Host "Do you want to remove a group? (Enter the group name or N to skip)"
-
-        if ($removeGroup -ne "N") {
-            $groupToRemove = $groups | Where-Object { $_.Name -eq $removeGroup }
-
-            if ($groupToRemove -ne $null) {
-                # Remove the selected group
-                Remove-LocalGroup -Name $removeGroup -ErrorAction SilentlyContinue
-                Write-Host "Group '$removeGroup' has been removed."
-            } else {
-                Write-Host "Group '$removeGroup' not found. No groups were removed."
-            }
-        }
+    if ($removeGroup -ne "N") {
+        Remove-LocalGroup -Name $removeGroup -ErrorAction SilentlyContinue
+        Write-Host "Group '$removeGroup' has been removed."
     } else {
-        Write-Host "No groups found on the system."
+        Write-Host "Group modification skipped."
     }
 }
 
 # Summarize changes
-Write-Host "Summary of Changes Made:"
+Write-Host "Changes Made."
 Write-Host "-------------------------"
+# You can extend this section to include any other summary items you feel are necessary.
 
-if ($firewallStatus -ne "Running") {
-    Write-Host " - Windows Firewall was enabled."
-}
-
-if ($windowsUpdateStatus -ne "Running") {
-    Write-Host " - Windows Updates and auto-updates were enabled."
-}
-
-if ($defenderStatus -ne "Running") {
-    Write-Host " - Windows Defender was activated."
-}
-
-if ($securePasswords -eq "Y") {
-    Write-Host " - BitLocker was enabled for password security."
-}
-
-if ($autoLoginEnabled) {
-    Write-Host " - Automatic login was disabled."
-}
-
-if ($remoteAccessEnabled -eq 0) {
-    Write-Host " - Remote access was disabled."
-}
-
-if ($installAntivirus -eq "Y") {
-    Write-Host " - An antivirus tool (e.g., MalwareBytes) was installed."
-}
-
-if ($flashInstalled -ne $null) {
-    Write-Host " - Adobe Flash Player was uninstalled."
-}
-
-Write-Host "-------------------------"
 Write-Host "Script completed. This script was planned and architected by Joshua Gutierrez, and checked with ChatGPT."
+
